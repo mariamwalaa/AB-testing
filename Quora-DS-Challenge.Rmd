@@ -1,0 +1,174 @@
+---
+title: "Quora Data Science Challenge"
+author: "Mariam Walaa"
+date: "11/10/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+```
+
+```{r message = F, warning = F}
+library(tidyverse)
+library(lubridate)
+```
+
+```{r message = F}
+user_activity_pre <- readr::read_csv("data/t3_user_active_min_pre.csv")
+user_activity <- readr::read_csv("data/t1_user_active_min.csv")
+user_attributes <- readr::read_csv("data/t4_user_attributes.csv")
+user_variant <- readr::read_csv("data/t2_user_variant.csv")
+```
+
+### Data 
+
+```{r}
+full_df <- 
+  user_activity_pre %>%
+  bind_rows(user_activity) %>%
+  filter(active_mins <= (24 * 60)) %>%
+  left_join(user_attributes, by = "uid") %>%
+  left_join(user_variant %>% select(-dt), by = "uid") %>%
+  filter(lubridate::year(signup_date) >= 2009) %>%
+  mutate(variant_number = recode(variant_number, `0` = "Control", `1` = "Treatment")) 
+
+glimpse(full_df)
+```
+
+### T-Test (Experiment Data)
+
+```{r}
+first_test <-
+    user_activity %>%
+    filter(active_mins <= (24 * 60)) %>%
+    left_join(user_variant %>% select(-dt), by = "uid") %>%
+    mutate(variant_number = recode(variant_number, `0` = "Control", `1` = "Treatment"))  %>%
+    group_by(dt, variant_number) %>%
+    summarise(total_mins = sum(active_mins), .groups = 'drop') 
+
+t.test(first_test %>% filter(variant_number == "Control") %>% ungroup()  %>% select(total_mins),
+       first_test %>% filter(variant_number == "Treatment") %>% ungroup()  %>% select(total_mins))
+```
+
+### T-Test (Pre-Experiment Included)
+
+```{r}
+second_test <-
+  user_activity_pre %>%
+  bind_rows(user_activity) %>%
+  filter(active_mins <= (24 * 60)) %>%
+  left_join(user_attributes, by = "uid") %>%
+  left_join(user_variant %>% select(-dt), by = "uid") %>%
+  filter(user_type != "new_user") %>%
+  mutate(variant_number = recode(variant_number, `0` = "Control", `1` = "Treatment"))  %>%
+  group_by(dt, variant_number) %>%
+  summarise(total_mins = sum(active_mins), .groups = 'drop') 
+
+t.test(second_test %>% filter(variant_number == "Control") %>% ungroup()  %>% select(total_mins),
+       second_test %>% filter(variant_number == "Treatment") %>% ungroup()  %>% select(total_mins))
+```
+### Analysis
+
+#### Counts By Stratification
+
+```{r}
+full_df %>%
+  group_by(uid, variant_number) %>%
+  count() %>% ungroup(uid) %>% count()
+
+full_df %>%
+    group_by(uid, variant_number, gender) %>%
+    count() %>% ungroup(uid) %>% count()
+
+full_df %>%
+  group_by(uid, variant_number, user_type) %>%
+    count() %>% ungroup(uid) %>% count()
+```
+
+#### Trend By Gender
+
+```{r}
+full_df %>%
+  group_by(uid, variant_number, gender) %>%
+    count() %>% ungroup(uid) %>% count() %>%
+    ggplot(aes(x = variant_number, y = n, fill = gender)) + 
+    geom_bar(stat = "identity", position='dodge') + 
+    ylab("Number Of Users") + xlab("Group") + 
+    ggtitle("Number Of Users By User Type, Per Group",
+            subtitle = "User types are similarly distributed across groups\nMajority of users are male") + 
+    scale_fill_manual(values=c("hotpink", "navy", "black"))
+```
+
+```{r}
+full_df %>%
+  group_by(dt, gender, variant_number) %>%
+    summarise(avg_min_per_usr = mean(active_mins), .groups = 'drop') %>%
+    ggplot(aes(x = dt, y = avg_min_per_usr, color = gender)) + 
+    geom_line() + facet_grid(rows = vars(variant_number)) +
+    scale_colour_manual(values=c("hotpink", "navy", "black")) + 
+    ggtitle("Average Minutes Per User, By Gender", 
+            subtitle = "Same trend across all gender post-experiment") + 
+    ylab("Average Minutes Per User") + xlab("Date") + 
+    scale_x_date(date_breaks = "months" , date_labels = "%b-%y") +
+    theme(text = element_text(size=9), axis.text.x = element_text(angle=60, hjust=1))
+```
+
+#### Trend By User Type
+
+```{r}
+full_df %>%
+  group_by(uid, variant_number, user_type) %>%
+    count() %>% ungroup(uid) %>% count() %>%
+    ggplot(aes(x = variant_number, y = n, fill = user_type)) + 
+    geom_bar(stat = "identity", position='dodge') + 
+    ylab("Number Of Users") + xlab("Group") + 
+    ggtitle("Number Of Users By User Type, Per Group",
+            subtitle = "User type is similarly distributed across groups\nMajority of users are non-readers, few are contributors") + 
+    scale_fill_manual(values=c("#1b9e77", "#e7298a", "#d95f02", "#7570b3")) # https://colorbrewer2.org/
+```
+
+```{r}
+full_df %>%
+  group_by(dt, user_type, variant_number) %>%
+    summarise(avg_min_per_usr = mean(active_mins), .groups = 'drop') %>%
+    ggplot(aes(x = dt, y = avg_min_per_usr, color = user_type)) + 
+    geom_line() + 
+    facet_grid(rows = vars(variant_number)) +
+    scale_colour_manual(values=c("#1b9e77", "#e7298a", "#d95f02", "#7570b3")) + # https://colorbrewer2.org/
+    ggtitle("Average Minutes Per User, By User Type", 
+            subtitle = "New users joined in February and do not have data pre-experiment,\ncontributors and readers show a big change in response to the treatment,\nnew users and non-readers remain fairly the same")  +
+    ylab("Average Minutes Per User") + xlab("Date") +
+    scale_x_date(date_breaks = "months" , date_labels = "%b-%y") +
+    theme(text = element_text(size=9), axis.text.x = element_text(angle=60, hjust=1))
+```
+
+### Summary 
+
+Three units of analysis were considered in conducting this t-test:
+
+1. Total minutes per user in each group (number of data points in each group = number of users in that group)
+2. Total minutes per user per day in each group (number of data points in each group = number of users in that group x number of days of the experiment)
+3. Total minutes per group per day (number of data points in each group = number of days of the experiment)
+
+The chosen unit of analysis was **Total Minutes Per Group Per Day**. The reason for this selection is we aim to compare the difference in minutes spent on the site between the Control Group and Treatment Group. This comparison is time-dependent as the user activity data is aggregated up to each user&#39;s daily activity (i.e., each user has a single record for their activity on a given day). Therefore, to determine whether there is a difference in time spent on the app by the group that was given the new UI design, we compare the day-by-day total minutes spent on the site by all users in each group on a given day.
+
+The number of data points in each group is then 150 days as the experiment runs from February to July.
+
+The other two choices would not be correct since the data points within a group would not be dependent. Each data point associated with a certain user would be dependent and this violates the assumption of independence for data points within a group in a t-test.
+
+To conduct the first t-test, I use the standard Welch Two Sample t-test implemented through the R base function t.test(). I remove records with active minutes greater than 24*60 minutes per day as well as users who signed up earlier than 2009 because those are clear logging errors. I use a left join to combine the user_activity data with the user_variant data, and I do a simple recoding of the variant number. I then group by the date and variant number, and summarize by summing up the active_mins for each date and group in the data.
+
+Based on these findings, I recommend pushing the new UI design to production, since we find a [84284.32, 88088.44] confidence interval in the difference between the average total time spent for both groups, with a large t-value of 89.307 indicating a large difference in the two groups and a small p-value indicating that there is stronger evidence in favor of the alternative hypothesis (that the true difference in means is not equal to 0).
+
+To compute the updated treatment effect by applying the pre-experiment data, I apply the same cleaning steps as in the first t-test, in addition to binding the rows of the user_activity_pre data with the user_activity data. The pre-experiment data does not change my conclusion about the treatment effect -- I still recommend that the UI design is pushed to production.
+
+The disaggregation by gender shows that trends are similar across genders within each group, but trends are vastly different between groups. In general, the treatment group shows an increase in total time spent per day once experiment begins. 
+
+The disaggregation by user shows that trends vary by user type. In the treatment group, new users and non-readers have the same overall trend while readers and contributors show an increase once experiment starts. In the control group, the trend remains same across all four user types, but the contributors and readers generally spend more time than non-readers and new users.
+
+The plot disaggregating by user type shows that new users enter post-experiment. Given this new information, I would perform a new t-test excluding the new users from the combined data.
+
+Looking at distributions of user types and genders within the control and treatment group, a large majority of users in both groups are male and non-readers. In the treatment group, the contributor group is the smallest group of users with large variance in time spent over time. I recommend the product team attempts the experiment with a more balanced stratification of user types within each group, or at least more contributors.
